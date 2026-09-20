@@ -349,22 +349,22 @@ namespace TigerTrade.Chart.Indicators.Custom
 
         public RegimeIndicator()
         {
-            Window = 12;
-            Smooth = 1;
+            Window = RegimeDefaults.Window;
+            Smooth = RegimeDefaults.Smooth;
 
             ThresholdMode = RegimeThresholdMode.Auto;
-            AutoLookback = 500;
-            LowPct = 15;
-            HighPct = 85;
+            AutoLookback = RegimeDefaults.AutoLookback;
+            LowPct = RegimeDefaults.LowPct;
+            HighPct = RegimeDefaults.HighPct;
 
-            // Квартили чистого случайного блуждания, измерены на 400 000 баров
-            ErLow = 0.42; ErHigh = 1.49;
-            RrLow = 0.84; RrHigh = 1.22;
-            VrLow = 0.85; VrHigh = 1.09;
+            ErLow = RegimeDefaults.ErLow; ErHigh = RegimeDefaults.ErHigh;
+            RrLow = RegimeDefaults.RrLow; RrHigh = RegimeDefaults.RrHigh;
+            VrLow = RegimeDefaults.VrLow; VrHigh = RegimeDefaults.VrHigh;
 
-            ShowEr = true; ShowRr = true; ShowVr = false; VrLookback = 96;
+            ShowEr = true; ShowRr = true; ShowVr = false;
+            VrLookback = RegimeDefaults.VrLookback;
 
-            ShowFill = true; ShowTitle = true; LineWidth = 2;
+            ShowFill = true; ShowTitle = true; LineWidth = RegimeDefaults.LineWidth;
             ErColor = Color.FromArgb(255, 235, 195, 80);
             RrColor = Color.FromArgb(255, 120, 150, 200);
             VrColor = Color.FromArgb(255, 200, 200, 200);
@@ -395,6 +395,7 @@ namespace TigerTrade.Chart.Indicators.Custom
             s.ErLow = ErLow; s.ErHigh = ErHigh;
             s.RrLow = RrLow; s.RrHigh = RrHigh;
             s.VrLow = VrLow; s.VrHigh = VrHigh;
+            s.Healed = "";
             return s;
         }
 
@@ -412,6 +413,9 @@ namespace TigerTrade.Chart.Indicators.Custom
                 Log.Info($"close: {Data.CloseSource}; k={Window}, smooth={Smooth}, bars={dp.Count}, " +
                          $"ceiling={RegimeCore.Ceiling(Window):F2}, auto={Data.AutoApplied}, " +
                          $"ER[{Data.ErLow:F2};{Data.ErHigh:F2}] RR[{Data.RrLow:F2};{Data.RrHigh:F2}]");
+                if (!string.IsNullOrEmpty(Data.Healed))
+                    Log.Info($"настройки из старой конфигурации, подставлены значения по умолчанию: {Data.Healed}. " +
+                             "Чтобы увидеть их в окне настроек — снимите индикатор с графика и поставьте заново.");
             }
         }
 

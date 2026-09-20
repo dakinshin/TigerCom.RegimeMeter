@@ -241,6 +241,18 @@ static class Program
 
             Check(DeserializedPass(typeof(RegimeIndicator), new RegimeIndicator()), "Regime: сеттеры + Execute/Render/GetMinMax/GetValues/GetLabels не падают");
             Check(DeserializedPass(typeof(RegimeShadeIndicator), new RegimeShadeIndicator()), "Regime Shade: то же самое");
+
+            // Чарт сохранён ПРЕДЫДУЩЕЙ версией: новых DataMember в XML нет,
+            // конструктор не выполняется → поля приезжают нулями.
+            var zero = default(RegimeSettings).Heal();
+            Check(zero.Window == RegimeDefaults.Window && zero.LowPct == RegimeDefaults.LowPct
+                  && zero.HighPct == RegimeDefaults.HighPct && zero.ErHigh > zero.ErLow
+                  && zero.RrHigh > zero.RrLow && zero.VrHigh > zero.VrLow,
+                  "нулевые настройки чинятся дефолтами");
+            Check(!string.IsNullOrEmpty(zero.Healed), $"чинилка отчитывается в лог: «{zero.Healed}»");
+            Check(Settings(K, 1, true).Heal().Healed == "", "корректные настройки не трогаются");
+
+            Check(OldConfigPass(), "старый чарт: заливка не красит подряд все бары (пороги 0/0 покрасили бы)");
         }
 
         Console.WriteLine();
@@ -345,15 +357,55 @@ static class Program
         }
     }
 
+    /// <summary>
+    /// Индикатор, восстановленный из чарта версии 0.1: заданы только те свойства,
+    /// которые в той версии существовали, всё новое остаётся default(0/false).
+    /// </summary>
+    static bool OldConfigPass()
+    {
+        try
+        {
+            var t = typeof(RegimeIndicator);
+            var raw = (RegimeIndicator)RuntimeHelpers.GetUninitializedObject(t);
+
+            var fromXml = new Dictionary<string, object>
+            {
+                { "Window", 12 }, { "Smooth", 1 },
+                { "ShowEr", true }, { "ShowRr", true },
+                { "ShowFill", true }, { "ShowTitle", true },
+                { "LineWidth", 2 },
+            };
+            foreach (var kv in fromXml) t.GetProperty(kv.Key).SetValue(raw, kv.Value);
+
+            Invoke(raw, "Execute");
+            double min, max;
+            raw.GetMinMax(out min, out max);
+            IndicatorBase.ScaleMin = min; IndicatorBase.ScaleMax = max;
+
+            var q = new DxVisualQueue();
+            raw.Render(q);
+
+            // Пороги 0/0 дали бы Regime = +1 на каждом баре → заливка во всех слотах.
+            var fills = q.Ops.FindAll(o => o.StartsWith("fill")).Count;
+            return fills > 0 && fills < ChartCanvas.Slots;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("         " + (ex.InnerException ?? ex));
+            return false;
+        }
+    }
+
     static RegimeSettings Settings(int window, int smooth, bool auto)
     {
         RegimeSettings s;
         s.Window = window; s.Smooth = smooth;
         s.NeedVr = false; s.VrLookback = 96;
         s.AutoThresholds = auto; s.AutoLookback = 500; s.LowPct = 15; s.HighPct = 85;
-        s.ErLow = 0.42; s.ErHigh = 1.49;
-        s.RrLow = 0.84; s.RrHigh = 1.22;
-        s.VrLow = 0.85; s.VrHigh = 1.09;
+        s.ErLow = RegimeDefaults.ErLow; s.ErHigh = RegimeDefaults.ErHigh;
+        s.RrLow = RegimeDefaults.RrLow; s.RrHigh = RegimeDefaults.RrHigh;
+        s.VrLow = RegimeDefaults.VrLow; s.VrHigh = RegimeDefaults.VrHigh;
+        s.Healed = "";
         return s;
     }
 

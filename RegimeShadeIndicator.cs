@@ -265,14 +265,16 @@ namespace TigerTrade.Chart.Indicators.Custom
         {
             ShowIndicatorTitle = false;
 
-            Window = 12; Smooth = 1; Source = RegimeShadeSource.Er; VrLookback = 96;
+            Window = RegimeDefaults.Window; Smooth = RegimeDefaults.Smooth;
+            Source = RegimeShadeSource.Er; VrLookback = RegimeDefaults.VrLookback;
 
             ThresholdMode = RegimeThresholdMode.Auto;
-            AutoLookback = 500; LowPct = 15; HighPct = 85;
+            AutoLookback = RegimeDefaults.AutoLookback;
+            LowPct = RegimeDefaults.LowPct; HighPct = RegimeDefaults.HighPct;
 
-            ErLow = 0.42; ErHigh = 1.49;
-            RrLow = 0.84; RrHigh = 1.22;
-            VrLow = 0.85; VrHigh = 1.09;
+            ErLow = RegimeDefaults.ErLow; ErHigh = RegimeDefaults.ErHigh;
+            RrLow = RegimeDefaults.RrLow; RrHigh = RegimeDefaults.RrHigh;
+            VrLow = RegimeDefaults.VrLow; VrHigh = RegimeDefaults.VrHigh;
 
             ShadeTrend = true; ShadeChop = true;
             TrendColor = Color.FromArgb(28, 60, 190, 90);
@@ -301,6 +303,7 @@ namespace TigerTrade.Chart.Indicators.Custom
             s.ErLow = ErLow; s.ErHigh = ErHigh;
             s.RrLow = RrLow; s.RrHigh = RrHigh;
             s.VrLow = VrLow; s.VrHigh = VrHigh;
+            s.Healed = "";
             return s;
         }
 
