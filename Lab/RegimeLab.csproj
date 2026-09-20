@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Стенд чувствительности: распределение метрик на шуме и задержка обнаружения
+       смены характера движения. Считает настоящим RegimeCore. Запуск: dotnet run -c Release
+       (полный прогон — несколько минут). Цифры из него сведены в README. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../RegimeCore.cs" />
+    <Compile Include="Vr.cs" />
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+</Project>

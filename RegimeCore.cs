@@ -114,5 +114,102 @@ namespace RegimeMeter
             if (value <= chopLevel) return -1;
             return 0;
         }
+
+        /// <summary>
+        /// √VR — корень из отношения дисперсий (оценка Ло–Маккинлая):
+        ///
+        ///     VR = среднее[(C[j] − C[j−k])²] / (k · среднее[(ΔC)²])
+        ///
+        /// по lookback перекрывающимся окнам. Шкала та же, что у ER/RR (1 —
+        /// случайное блуждание), но разброс кратно меньше: ER берёт ОДНО смещение
+        /// и потому шумит одинаково при любом k, а здесь усредняются десятки окон.
+        /// Платим задержкой — см. README, раздел про чувствительность.
+        /// </summary>
+        public static void ComputeVr(double[] close, int count, int window, int lookback, double[] vr)
+        {
+            if (close == null || vr == null) return;
+            if (count > close.Length) count = close.Length;
+            if (count > vr.Length) count = vr.Length;
+            if (count <= 0) return;
+
+            for (var i = 0; i < count; i++) vr[i] = Undefined;
+
+            var k = Clamp(window);
+            if (lookback < 4) lookback = 4;
+            var start = lookback + k - 1;
+            if (count <= start) return;
+
+            double num = 0, den = 0;
+            for (var j = start - lookback + 1; j <= start; j++)
+            {
+                var a = close[j] - close[j - k]; num += a * a;
+                var b = close[j] - close[j - 1]; den += b * b;
+            }
+            vr[start] = Ratio(num, den, k);
+
+            for (var i = start + 1; i < count; i++)
+            {
+                var rem = i - lookback;
+                var a1 = close[i] - close[i - k]; var a0 = close[rem] - close[rem - k];
+                var b1 = close[i] - close[i - 1]; var b0 = close[rem] - close[rem - 1];
+                num += a1 * a1 - a0 * a0;
+                den += b1 * b1 - b0 * b0;
+                if (num < 0) num = 0;
+                if (den < 0) den = 0;
+                vr[i] = Ratio(num, den, k);
+            }
+        }
+
+        private static double Ratio(double num, double den, int k)
+        {
+            if (den <= 0 || num < 0) return Undefined;
+            var v = num / (k * den);
+            return v <= 0 ? Undefined : Math.Sqrt(v);
+        }
+
+        /// <summary>
+        /// Квантили ряда по последним lookback определённым значениям — для
+        /// автопорогов «нижние/верхние N % того, что делает этот инструмент».
+        /// </summary>
+        public static bool Quantiles(double[] values, int count, int lookback,
+                                     double lowPct, double highPct,
+                                     out double low, out double high)
+        {
+            low = Undefined; high = Undefined;
+            if (values == null) return false;
+            if (count > values.Length) count = values.Length;
+            if (count <= 0 || lookback <= 0) return false;
+
+            var from = count - lookback;
+            if (from < 0) from = 0;
+
+            var buf = new double[count - from];
+            var n = 0;
+            for (var i = from; i < count; i++)
+            {
+                var v = values[i];
+                if (double.IsNaN(v) || double.IsInfinity(v)) continue;
+                buf[n++] = v;
+            }
+            if (n < 20) return false;   // меньше — это не калибровка, а гадание
+
+            Array.Sort(buf, 0, n);
+            low = Percentile(buf, n, lowPct);
+            high = Percentile(buf, n, highPct);
+            if (!(high > low)) return false;
+            return true;
+        }
+
+        private static double Percentile(double[] sorted, int n, double pct)
+        {
+            if (pct < 0) pct = 0;
+            if (pct > 100) pct = 100;
+            var idx = pct / 100.0 * (n - 1);
+            var lo = (int)Math.Floor(idx);
+            var hi = (int)Math.Ceiling(idx);
+            if (lo < 0) lo = 0;
+            if (hi > n - 1) hi = n - 1;
+            return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+        }
     }
 }

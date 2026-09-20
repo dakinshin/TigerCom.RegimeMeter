@@ -1,22 +1,27 @@
 //--------------------------------------------------------------------------------
 // Regime — отдельная панель под графиком: запильно цена идёт или безоткатно.
 //
-// Окно k баров = «старшая свеча», сами бары = «младшие». Две линии:
+// Окно k баров = «старшая свеча», сами бары = «младшие». Три метрики на одной
+// шкале (1.0 = случайное блуждание):
 //
-//   ER (толстая) = √k · |C[i] − C[i−k]| / Σ|ΔC|   — безоткатность хода
+//   ER (толстая) = √k · |C[i] − C[i−k]| / Σ|ΔC|   — безоткатность хода, быстрая
 //   RR (тонкая)  = √k · (HH − LL) / Σ TR          — размах старшей свечи
+//   VR (пунктир) = √(дисперсия k-барных / k·дисперсия барных) — медленная, статистическая
 //
-// Шкала одна для обеих: 1.0 — как у случайного блуждания, выше — движение
-// направленное/безоткатное, ниже — топтание. Потолок √k (для k=12 это 3.46).
-// Расхождение линий читается так: RR высоко при низком ER — крупные качели
-// без прогресса; оба высоко — чистый импульс.
+// ВАЖНО про чувствительность. ER берёт ОДНО смещение за окно, поэтому шумит
+// одинаково при любом k: на чистом случайном блуждании его ст.отклонение ≈ 0.72
+// и для k=6, и для k=48. Увеличение k замедляет реакцию, но НЕ делает показание
+// надёжнее. Поэтому фиксированные пороги вроде «1.20» бессмысленны — на шуме
+// они пробиваются больше чем в трети баров. По умолчанию пороги считаются по
+// квантилям самого инструмента (см. раздел «2. Пороги»), а за статистически
+// честным ответом «это точно не шум» — линия VR. Цифры в README.
 //
 // Математика — в RegimeCore.cs (проверяется тестами без терминала).
 //
-// ВАЖНО (инцидент 29.08.2026): при загрузке конфигурации терминал создаёт
-// индикатор БЕЗ конструктора (DataContractSerializer → GetUninitializedObject)
-// и сразу дёргает сеттеры через CopyTemplate. Поэтому: никаких инициализаторов
-// полей, сеттеры пишут только своё поле, все runtime-объекты ленивые.
+// ВАЖНО про загрузку (инцидент 29.08.2026): терминал создаёт индикатор БЕЗ
+// конструктора (DataContractSerializer → GetUninitializedObject) и сразу дёргает
+// сеттеры через CopyTemplate. Поэтому: никаких инициализаторов полей, сеттеры
+// пишут только своё поле, все runtime-объекты ленивые.
 //--------------------------------------------------------------------------------
 
 using System;
@@ -38,6 +43,15 @@ using TigerTrade.Dx.Enums;
 
 namespace TigerTrade.Chart.Indicators.Custom
 {
+    [TypeConverter(typeof(EnumDescriptionTypeConverter))]
+    [DataContract(Name = "RegimeThresholdMode",
+        Namespace = "http://schemas.datacontract.org/2004/07/TigerTrade.Chart.Indicators.Custom")]
+    public enum RegimeThresholdMode
+    {
+        [EnumMember(Value = "Auto"), Description("Авто — квантили этого инструмента")] Auto,
+        [EnumMember(Value = "Manual"), Description("Вручную — числа ниже")] Manual,
+    }
+
     [DataContract(Name = "RegimeIndicator",
         Namespace = "http://schemas.datacontract.org/2004/07/TigerTrade.Chart.Indicators.Custom")]
     [Indicator("Z_Regime", "Regime", false, Type = typeof(RegimeIndicator))]
@@ -76,39 +90,120 @@ namespace TigerTrade.Chart.Indicators.Custom
 
         // ======================= 2. Пороги =======================
 
-        private double _chopLevel;
-        [DataMember(Name = "ChopLevel")]
-        [Category("2. Пороги"), DisplayName("«Запил» — ниже этого")]
-        public double ChopLevel
+        private RegimeThresholdMode _thresholdMode;
+        [DataMember(Name = "ThresholdMode")]
+        [Category("2. Пороги"), DisplayName("Откуда брать пороги")]
+        public RegimeThresholdMode ThresholdMode
         {
-            get => _chopLevel;
+            get => _thresholdMode;
+            set { if (value == _thresholdMode) return; _thresholdMode = value; Touch(); OnPropertyChanged(); }
+        }
+
+        private int _autoLookback;
+        [DataMember(Name = "AutoLookback")]
+        [Category("2. Пороги"), DisplayName("Авто: по скольким последним барам калибровать")]
+        public int AutoLookback
+        {
+            get => _autoLookback;
             set
             {
-                value = value < 0.05 ? 0.05 : (value > 5 ? 5 : value);
-                if (value == _chopLevel) return;
-                _chopLevel = value; Touch(); OnPropertyChanged();
+                value = value < 50 ? 50 : (value > 20000 ? 20000 : value);
+                if (value == _autoLookback) return;
+                _autoLookback = value; Touch(); OnPropertyChanged();
             }
         }
 
-        private double _trendLevel;
-        [DataMember(Name = "TrendLevel")]
-        [Category("2. Пороги"), DisplayName("«Безоткатно» — выше этого")]
-        public double TrendLevel
+        private int _lowPct;
+        [DataMember(Name = "LowPct")]
+        [Category("2. Пороги"), DisplayName("Авто: нижний процентиль («запил»), %")]
+        public int LowPct
         {
-            get => _trendLevel;
+            get => _lowPct;
             set
             {
-                value = value < 0.05 ? 0.05 : (value > 25 ? 25 : value);
-                if (value == _trendLevel) return;
-                _trendLevel = value; Touch(); OnPropertyChanged();
+                value = value < 1 ? 1 : (value > 49 ? 49 : value);
+                if (value == _lowPct) return;
+                _lowPct = value; Touch(); OnPropertyChanged();
             }
         }
 
-        // ======================= 3. Вид =======================
+        private int _highPct;
+        [DataMember(Name = "HighPct")]
+        [Category("2. Пороги"), DisplayName("Авто: верхний процентиль («безоткатно»), %")]
+        public int HighPct
+        {
+            get => _highPct;
+            set
+            {
+                value = value < 51 ? 51 : (value > 99 ? 99 : value);
+                if (value == _highPct) return;
+                _highPct = value; Touch(); OnPropertyChanged();
+            }
+        }
+
+        // ================= 3. Пороги вручную (когда режим «вручную») =================
+        // Значения по умолчанию — измеренные квартили на чистом случайном блуждании,
+        // у каждой метрики свои: разброс ER кратно шире, чем у RR.
+
+        private double _erLow;
+        [DataMember(Name = "ErLow")]
+        [Category("3. Пороги вручную"), DisplayName("ER: «запил» ниже")]
+        public double ErLow
+        {
+            get => _erLow;
+            set { value = ClampLevel(value); if (value == _erLow) return; _erLow = value; Touch(); OnPropertyChanged(); }
+        }
+
+        private double _erHigh;
+        [DataMember(Name = "ErHigh")]
+        [Category("3. Пороги вручную"), DisplayName("ER: «безоткатно» выше")]
+        public double ErHigh
+        {
+            get => _erHigh;
+            set { value = ClampLevel(value); if (value == _erHigh) return; _erHigh = value; Touch(); OnPropertyChanged(); }
+        }
+
+        private double _rrLow;
+        [DataMember(Name = "RrLow")]
+        [Category("3. Пороги вручную"), DisplayName("RR: «запил» ниже")]
+        public double RrLow
+        {
+            get => _rrLow;
+            set { value = ClampLevel(value); if (value == _rrLow) return; _rrLow = value; Touch(); OnPropertyChanged(); }
+        }
+
+        private double _rrHigh;
+        [DataMember(Name = "RrHigh")]
+        [Category("3. Пороги вручную"), DisplayName("RR: «безоткатно» выше")]
+        public double RrHigh
+        {
+            get => _rrHigh;
+            set { value = ClampLevel(value); if (value == _rrHigh) return; _rrHigh = value; Touch(); OnPropertyChanged(); }
+        }
+
+        private double _vrLow;
+        [DataMember(Name = "VrLow")]
+        [Category("3. Пороги вручную"), DisplayName("VR: «запил» ниже")]
+        public double VrLow
+        {
+            get => _vrLow;
+            set { value = ClampLevel(value); if (value == _vrLow) return; _vrLow = value; Touch(); OnPropertyChanged(); }
+        }
+
+        private double _vrHigh;
+        [DataMember(Name = "VrHigh")]
+        [Category("3. Пороги вручную"), DisplayName("VR: «безоткатно» выше")]
+        public double VrHigh
+        {
+            get => _vrHigh;
+            set { value = ClampLevel(value); if (value == _vrHigh) return; _vrHigh = value; Touch(); OnPropertyChanged(); }
+        }
+
+        // ======================= 4. Метрики =======================
 
         private bool _showEr;
         [DataMember(Name = "ShowEr")]
-        [Category("3. Вид"), DisplayName("Линия ER (безоткатность)")]
+        [Category("4. Метрики"), DisplayName("ER — безоткатность (быстрая, шумная)")]
         public bool ShowEr
         {
             get => _showEr;
@@ -117,16 +212,41 @@ namespace TigerTrade.Chart.Indicators.Custom
 
         private bool _showRr;
         [DataMember(Name = "ShowRr")]
-        [Category("3. Вид"), DisplayName("Линия RR (размах)")]
+        [Category("4. Метрики"), DisplayName("RR — размах")]
         public bool ShowRr
         {
             get => _showRr;
             set { if (value == _showRr) return; _showRr = value; Touch(); OnPropertyChanged(); }
         }
 
+        private bool _showVr;
+        [DataMember(Name = "ShowVr")]
+        [Category("4. Метрики"), DisplayName("VR — медленная, статистическая")]
+        public bool ShowVr
+        {
+            get => _showVr;
+            set { if (value == _showVr) return; _showVr = value; Touch(); OnPropertyChanged(); }
+        }
+
+        private int _vrLookback;
+        [DataMember(Name = "VrLookback")]
+        [Category("4. Метрики"), DisplayName("VR: по скольким барам усреднять")]
+        public int VrLookback
+        {
+            get => _vrLookback;
+            set
+            {
+                value = value < 8 ? 8 : (value > 2000 ? 2000 : value);
+                if (value == _vrLookback) return;
+                _vrLookback = value; Touch(); OnPropertyChanged();
+            }
+        }
+
+        // ======================= 5. Вид =======================
+
         private bool _showFill;
         [DataMember(Name = "ShowFill")]
-        [Category("3. Вид"), DisplayName("Заливка между ER и уровнем 1.0")]
+        [Category("5. Вид"), DisplayName("Заливка между главной линией и уровнем 1.0")]
         public bool ShowFill
         {
             get => _showFill;
@@ -135,7 +255,7 @@ namespace TigerTrade.Chart.Indicators.Custom
 
         private bool _showTitle;
         [DataMember(Name = "ShowTitle")]
-        [Category("3. Вид"), DisplayName("Строка состояния в углу панели")]
+        [Category("5. Вид"), DisplayName("Строка состояния в углу панели")]
         public bool ShowTitle
         {
             get => _showTitle;
@@ -144,7 +264,7 @@ namespace TigerTrade.Chart.Indicators.Custom
 
         private int _lineWidth;
         [DataMember(Name = "LineWidth")]
-        [Category("3. Вид"), DisplayName("Толщина линии ER, px")]
+        [Category("5. Вид"), DisplayName("Толщина главной линии, px")]
         public int LineWidth
         {
             get => _lineWidth;
@@ -158,7 +278,7 @@ namespace TigerTrade.Chart.Indicators.Custom
 
         private XColor _erColor;
         [DataMember(Name = "ErColor")]
-        [Category("3. Вид"), DisplayName("Цвет линии ER")]
+        [Category("5. Вид"), DisplayName("Цвет линии ER")]
         public XColor ErColor
         {
             get => _erColor;
@@ -167,16 +287,25 @@ namespace TigerTrade.Chart.Indicators.Custom
 
         private XColor _rrColor;
         [DataMember(Name = "RrColor")]
-        [Category("3. Вид"), DisplayName("Цвет линии RR")]
+        [Category("5. Вид"), DisplayName("Цвет линии RR")]
         public XColor RrColor
         {
             get => _rrColor;
             set { if (value == _rrColor) return; _rrColor = value; _rrBrush = null; _rrPen = null; Touch(); OnPropertyChanged(); }
         }
 
+        private XColor _vrColor;
+        [DataMember(Name = "VrColor")]
+        [Category("5. Вид"), DisplayName("Цвет линии VR")]
+        public XColor VrColor
+        {
+            get => _vrColor;
+            set { if (value == _vrColor) return; _vrColor = value; _vrBrush = null; _vrPen = null; Touch(); OnPropertyChanged(); }
+        }
+
         private XColor _trendColor;
         [DataMember(Name = "TrendColor")]
-        [Category("3. Вид"), DisplayName("Заливка «безоткатно» (с прозрачностью)")]
+        [Category("5. Вид"), DisplayName("Заливка «безоткатно» (с прозрачностью)")]
         public XColor TrendColor
         {
             get => _trendColor;
@@ -185,7 +314,7 @@ namespace TigerTrade.Chart.Indicators.Custom
 
         private XColor _chopColor;
         [DataMember(Name = "ChopColor")]
-        [Category("3. Вид"), DisplayName("Заливка «запил» (с прозрачностью)")]
+        [Category("5. Вид"), DisplayName("Заливка «запил» (с прозрачностью)")]
         public XColor ChopColor
         {
             get => _chopColor;
@@ -198,19 +327,21 @@ namespace TigerTrade.Chart.Indicators.Custom
         private RegimeData _data;
         private RegimeData Data => _data ?? (_data = new RegimeData());
 
-        private XBrush _erBrush, _rrBrush, _trendBrush, _chopBrush;
+        private XBrush _erBrush, _rrBrush, _vrBrush, _trendBrush, _chopBrush;
         private XBrush ErBrush => _erBrush ?? (_erBrush = new XBrush(_erColor));
         private XBrush RrBrush => _rrBrush ?? (_rrBrush = new XBrush(_rrColor));
+        private XBrush VrBrush => _vrBrush ?? (_vrBrush = new XBrush(_vrColor));
         private XBrush TrendBrush => _trendBrush ?? (_trendBrush = new XBrush(_trendColor));
         private XBrush ChopBrush => _chopBrush ?? (_chopBrush = new XBrush(_chopColor));
 
-        private XPen _erPen, _rrPen;
+        private XPen _erPen, _rrPen, _vrPen;
         private XPen ErPen => _erPen ?? (_erPen = new XPen(ErBrush, _lineWidth < 1 ? 1 : _lineWidth, XDashStyle.Solid));
         private XPen RrPen => _rrPen ?? (_rrPen = new XPen(RrBrush, 1, XDashStyle.Solid));
+        private XPen VrPen => _vrPen ?? (_vrPen = new XPen(VrBrush, 1, XDashStyle.Dash));
 
-        private int _touch;            // версия настроек
-        private int _calcVersion;      // версия данных
-        private long _renderedVersion; // 0 = ещё не рисовали
+        private int _touch;
+        private int _calcVersion;
+        private long _renderedVersion;
         private bool _sourceLogged;
 
         [Browsable(false)]
@@ -221,16 +352,27 @@ namespace TigerTrade.Chart.Indicators.Custom
             Window = 12;
             Smooth = 1;
 
-            ChopLevel = 0.85;
-            TrendLevel = 1.20;
+            ThresholdMode = RegimeThresholdMode.Auto;
+            AutoLookback = 500;
+            LowPct = 15;
+            HighPct = 85;
 
-            ShowEr = true; ShowRr = true; ShowFill = true; ShowTitle = true;
-            LineWidth = 2;
+            // Квартили чистого случайного блуждания, измерены на 400 000 баров
+            ErLow = 0.42; ErHigh = 1.49;
+            RrLow = 0.84; RrHigh = 1.22;
+            VrLow = 0.85; VrHigh = 1.09;
+
+            ShowEr = true; ShowRr = true; ShowVr = false; VrLookback = 96;
+
+            ShowFill = true; ShowTitle = true; LineWidth = 2;
             ErColor = Color.FromArgb(255, 235, 195, 80);
             RrColor = Color.FromArgb(255, 120, 150, 200);
+            VrColor = Color.FromArgb(255, 200, 200, 200);
             TrendColor = Color.FromArgb(55, 60, 190, 90);
             ChopColor = Color.FromArgb(55, 220, 60, 60);
         }
+
+        private static double ClampLevel(double v) => v < 0.01 ? 0.01 : (v > 25 ? 25 : v);
 
         // ========================= Расчёт =========================
 
@@ -239,18 +381,37 @@ namespace TigerTrade.Chart.Indicators.Custom
         /// <summary>Версия состояния БЕЗ обращения к DataProvider — для CheckNeedRedraw.</summary>
         private long CurrentVersion() => 1L + ((long)_calcVersion << 20) + _touch;
 
+        private RegimeSettings BuildSettings()
+        {
+            RegimeSettings s;
+            s.Window = Window;
+            s.Smooth = Smooth;
+            s.NeedVr = ShowVr;
+            s.VrLookback = VrLookback;
+            s.AutoThresholds = ThresholdMode == RegimeThresholdMode.Auto;
+            s.AutoLookback = AutoLookback;
+            s.LowPct = LowPct;
+            s.HighPct = HighPct;
+            s.ErLow = ErLow; s.ErHigh = ErHigh;
+            s.RrLow = RrLow; s.RrHigh = RrHigh;
+            s.VrLow = VrLow; s.VrHigh = VrHigh;
+            return s;
+        }
+
         /// <summary>Пересчёт рядов. Только из Execute()/Render()/GetMinMax() — колбэков терминала.</summary>
         private void EnsureCalc()
         {
             var dp = DataProvider;
             if (dp == null) return;
-            if (!Data.Update(Helper, dp.Count, Window, Smooth, Environment.TickCount)) return;
+            if (!Data.Update(Helper, dp.Count, BuildSettings(), Environment.TickCount)) return;
 
             _calcVersion++;
             if (!_sourceLogged)
             {
                 _sourceLogged = true;
-                Log.Info($"close: {Data.CloseSource}; k={Window}, smooth={Smooth}, bars={dp.Count}, ceiling={RegimeCore.Ceiling(Window):F2}");
+                Log.Info($"close: {Data.CloseSource}; k={Window}, smooth={Smooth}, bars={dp.Count}, " +
+                         $"ceiling={RegimeCore.Ceiling(Window):F2}, auto={Data.AutoApplied}, " +
+                         $"ER[{Data.ErLow:F2};{Data.ErHigh:F2}] RR[{Data.RrLow:F2};{Data.RrHigh:F2}]");
             }
         }
 
@@ -265,6 +426,30 @@ namespace TigerTrade.Chart.Indicators.Custom
             try { return CurrentVersion() != _renderedVersion; }
             catch { return false; }
         }
+
+        // ======== Главная метрика: она ведёт заливку, пороговые линии и заголовок ========
+
+        private int MainMetric() => ShowEr ? 0 : (ShowRr ? 1 : (ShowVr ? 2 : -1));
+
+        private double Value(int metric, int bar)
+        {
+            switch (metric)
+            {
+                case 0: return Data.Er(bar);
+                case 1: return Data.Rr(bar);
+                case 2: return Data.Vr(bar);
+                default: return RegimeCore.Undefined;
+            }
+        }
+
+        private double LevelLow(int metric) =>
+            metric == 0 ? Data.ErLow : (metric == 1 ? Data.RrLow : Data.VrLow);
+
+        private double LevelHigh(int metric) =>
+            metric == 0 ? Data.ErHigh : (metric == 1 ? Data.RrHigh : Data.VrHigh);
+
+        private int RegimeAt(int metric, int bar) =>
+            RegimeCore.Regime(Value(metric, bar), LevelLow(metric), LevelHigh(metric));
 
         // ========================= Шкала панели =========================
 
@@ -286,12 +471,19 @@ namespace TigerTrade.Chart.Indicators.Custom
                     if (idx < 0 || idx >= Data.Count) continue;
                     if (ShowEr) Accumulate(Data.Er(idx), ref lo, ref hi);
                     if (ShowRr) Accumulate(Data.Rr(idx), ref lo, ref hi);
+                    if (ShowVr) Accumulate(Data.Vr(idx), ref lo, ref hi);
                 }
                 if (lo > hi) { min = 0; max = ceiling; return true; }
 
-                // Уровень 1.0 и пороги всегда в кадре — иначе шкала врёт на глаз.
-                lo = Math.Min(Math.Min(lo, 1.0), ChopLevel);
-                hi = Math.Max(Math.Max(hi, 1.0), TrendLevel);
+                // Уровень 1.0 и пороги главной метрики всегда в кадре.
+                lo = Math.Min(lo, 1.0);
+                hi = Math.Max(hi, 1.0);
+                var main = MainMetric();
+                if (main >= 0)
+                {
+                    lo = Math.Min(lo, LevelLow(main));
+                    hi = Math.Max(hi, LevelHigh(main));
+                }
 
                 var pad = Math.Max(0.04, (hi - lo) * 0.08);
                 min = Math.Max(0, lo - pad);
@@ -324,15 +516,19 @@ namespace TigerTrade.Chart.Indicators.Custom
                 var axisPen = new XPen(new XBrush(Canvas.Theme.ChartAxisColor), 1, XDashStyle.Solid);
                 var dashPen = new XPen(new XBrush(Canvas.Theme.ChartAxisColor), 1, XDashStyle.Dash);
 
-                // Уровень «случайного блуждания» и пороги режимов.
+                var main = MainMetric();
                 DrawLevel(visual, axisPen, rect, 1.0);
-                DrawLevel(visual, dashPen, rect, TrendLevel);
-                DrawLevel(visual, dashPen, rect, ChopLevel);
+                if (main >= 0)
+                {
+                    DrawLevel(visual, dashPen, rect, LevelHigh(main));
+                    DrawLevel(visual, dashPen, rect, LevelLow(main));
+                }
 
-                if (ShowFill && ShowEr) DrawFill(visual, rect);
-                if (ShowRr) DrawSeries(visual, RrPen, false);
-                if (ShowEr) DrawSeries(visual, ErPen, true);
-                if (ShowTitle) DrawTitle(visual, rect);
+                if (ShowFill && main >= 0) DrawFill(visual, rect, main);
+                if (ShowVr) DrawSeries(visual, VrPen, 2);
+                if (ShowRr) DrawSeries(visual, RrPen, 1);
+                if (ShowEr) DrawSeries(visual, ErPen, 0);
+                if (ShowTitle) DrawTitle(visual, rect, main);
             }
             catch (Exception ex)
             {
@@ -343,12 +539,13 @@ namespace TigerTrade.Chart.Indicators.Custom
 
         private void DrawLevel(DxVisualQueue visual, XPen pen, Rect rect, double value)
         {
+            if (double.IsNaN(value)) return;
             var y = GetY(value);
             if (y < rect.Top || y > rect.Bottom) return;
             visual.DrawLine(pen, new Point(rect.Left, y), new Point(rect.Right, y));
         }
 
-        private void DrawSeries(DxVisualQueue visual, XPen pen, bool useEr)
+        private void DrawSeries(DxVisualQueue visual, XPen pen, int metric)
         {
             var slots = Canvas.Count;
             var count = Data.Count;
@@ -360,7 +557,7 @@ namespace TigerTrade.Chart.Indicators.Custom
                 var idx = Canvas.GetIndex(i);
                 if (idx < 0 || idx >= count) { has = false; continue; }
 
-                var v = useEr ? Data.Er(idx) : Data.Rr(idx);
+                var v = Value(metric, idx);
                 if (double.IsNaN(v) || double.IsInfinity(v)) { has = false; continue; }
 
                 var x = Canvas.GetX(idx);
@@ -370,8 +567,8 @@ namespace TigerTrade.Chart.Indicators.Custom
             }
         }
 
-        /// <summary>Столбики от уровня 1.0 до линии ER: зелёные выше порога, красные ниже.</summary>
-        private void DrawFill(DxVisualQueue visual, Rect rect)
+        /// <summary>Столбики от уровня 1.0 до главной линии: зелёные выше верхнего порога, красные ниже нижнего.</summary>
+        private void DrawFill(DxVisualQueue visual, Rect rect, int metric)
         {
             var slots = Canvas.Count;
             var count = Data.Count;
@@ -384,12 +581,10 @@ namespace TigerTrade.Chart.Indicators.Custom
                 var idx = Canvas.GetIndex(i);
                 if (idx < 0 || idx >= count) continue;
 
-                var v = Data.Er(idx);
-                if (double.IsNaN(v) || double.IsInfinity(v)) continue;
-
-                var regime = RegimeCore.Regime(v, ChopLevel, TrendLevel);
+                var regime = RegimeAt(metric, idx);
                 if (regime == 0) continue;
 
+                var v = Value(metric, idx);
                 var y = GetY(v);
                 var top = Math.Min(y, baseY);
                 var bottom = Math.Max(y, baseY);
@@ -403,24 +598,26 @@ namespace TigerTrade.Chart.Indicators.Custom
             }
         }
 
-        private void DrawTitle(DxVisualQueue visual, Rect rect)
+        private void DrawTitle(DxVisualQueue visual, Rect rect, int main)
         {
             var last = Data.Count - 1 - Canvas.Start;
             if (last < 0) return;
 
-            var er = Data.Er(last);
-            var rr = Data.Rr(last);
-            var regime = RegimeCore.Regime(er, ChopLevel, TrendLevel);
-
             var text = "k" + Window.ToString(CultureInfo.InvariantCulture);
-            if (!double.IsNaN(er)) text += "  ER " + er.ToString("0.00", CultureInfo.InvariantCulture);
-            if (!double.IsNaN(rr)) text += "  RR " + rr.ToString("0.00", CultureInfo.InvariantCulture);
+            if (ShowEr) text += Part("ER", Data.Er(last));
+            if (ShowRr) text += Part("RR", Data.Rr(last));
+            if (ShowVr) text += Part("VR", Data.Vr(last));
+
+            var regime = main >= 0 ? RegimeAt(main, last) : 0;
             text += regime > 0 ? "  ▲ безоткатно" : (regime < 0 ? "  ▼ запил" : "  · нейтрально");
+            if (main >= 0)
+                text += string.Format(CultureInfo.InvariantCulture, "  [{0:0.00}…{1:0.00}]{2}",
+                    LevelLow(main), LevelHigh(main), Data.AutoApplied ? " авто" : "");
 
             var font = Canvas.ChartFont;
             var w = font.GetWidth(text) + 8;
             var h = font.GetHeight() + 2;
-            if (w < 8 || w > rect.Width) w = Math.Min(rect.Width, 260);
+            if (w < 8 || w > rect.Width) w = Math.Min(rect.Width, 380);
 
             var box = new Rect(rect.Left + 4, rect.Top + 2, w, h);
             if (regime > 0) visual.FillRectangle(TrendBrush, box);
@@ -430,6 +627,9 @@ namespace TigerTrade.Chart.Indicators.Custom
                 new Rect(box.Left + 4, box.Top, box.Width - 8, box.Height), XTextAlignment.Left);
         }
 
+        private static string Part(string name, double v) =>
+            double.IsNaN(v) ? "" : "  " + name + " " + v.ToString("0.00", CultureInfo.InvariantCulture);
+
         // ========================= Значения под курсором / метки шкалы =========================
 
         public override List<IndicatorValueInfo> GetValues(int cursorPos)
@@ -438,19 +638,18 @@ namespace TigerTrade.Chart.Indicators.Custom
             try
             {
                 if (!Data.HasResult) return info;
-                if (ShowEr)
-                {
-                    var v = Data.Er(cursorPos);
-                    if (!double.IsNaN(v)) info.Add(new IndicatorValueInfo("ER " + v.ToString("0.00", CultureInfo.InvariantCulture), ErBrush));
-                }
-                if (ShowRr)
-                {
-                    var v = Data.Rr(cursorPos);
-                    if (!double.IsNaN(v)) info.Add(new IndicatorValueInfo("RR " + v.ToString("0.00", CultureInfo.InvariantCulture), RrBrush));
-                }
+                Add(info, ShowEr, "ER", Data.Er(cursorPos), ErBrush);
+                Add(info, ShowRr, "RR", Data.Rr(cursorPos), RrBrush);
+                Add(info, ShowVr, "VR", Data.Vr(cursorPos), VrBrush);
             }
             catch (Exception ex) { LogError("values", ex); }
             return info;
+        }
+
+        private static void Add(List<IndicatorValueInfo> info, bool show, string name, double v, XBrush brush)
+        {
+            if (!show || double.IsNaN(v)) return;
+            info.Add(new IndicatorValueInfo(name + " " + v.ToString("0.00", CultureInfo.InvariantCulture), brush));
         }
 
         public override void GetLabels(ref List<IndicatorLabelInfo> labels)
@@ -461,16 +660,9 @@ namespace TigerTrade.Chart.Indicators.Custom
                 var last = Data.Count - 1 - Canvas.Start;
                 if (last < 0) return;
 
-                if (ShowEr)
-                {
-                    var v = Data.Er(last);
-                    if (!double.IsNaN(v)) labels.Add(new IndicatorLabelInfo(v, _erColor));
-                }
-                if (ShowRr)
-                {
-                    var v = Data.Rr(last);
-                    if (!double.IsNaN(v)) labels.Add(new IndicatorLabelInfo(v, _rrColor));
-                }
+                if (ShowEr && !double.IsNaN(Data.Er(last))) labels.Add(new IndicatorLabelInfo(Data.Er(last), _erColor));
+                if (ShowRr && !double.IsNaN(Data.Rr(last))) labels.Add(new IndicatorLabelInfo(Data.Rr(last), _rrColor));
+                if (ShowVr && !double.IsNaN(Data.Vr(last))) labels.Add(new IndicatorLabelInfo(Data.Vr(last), _vrColor));
             }
             catch (Exception ex) { LogError("labels", ex); }
         }
@@ -479,10 +671,15 @@ namespace TigerTrade.Chart.Indicators.Custom
         {
             var i = (RegimeIndicator)indicator;
             Window = i.Window; Smooth = i.Smooth;
-            ChopLevel = i.ChopLevel; TrendLevel = i.TrendLevel;
-            ShowEr = i.ShowEr; ShowRr = i.ShowRr; ShowFill = i.ShowFill; ShowTitle = i.ShowTitle;
-            LineWidth = i.LineWidth;
-            ErColor = i.ErColor; RrColor = i.RrColor; TrendColor = i.TrendColor; ChopColor = i.ChopColor;
+            ThresholdMode = i.ThresholdMode; AutoLookback = i.AutoLookback;
+            LowPct = i.LowPct; HighPct = i.HighPct;
+            ErLow = i.ErLow; ErHigh = i.ErHigh;
+            RrLow = i.RrLow; RrHigh = i.RrHigh;
+            VrLow = i.VrLow; VrHigh = i.VrHigh;
+            ShowEr = i.ShowEr; ShowRr = i.ShowRr; ShowVr = i.ShowVr; VrLookback = i.VrLookback;
+            ShowFill = i.ShowFill; ShowTitle = i.ShowTitle; LineWidth = i.LineWidth;
+            ErColor = i.ErColor; RrColor = i.RrColor; VrColor = i.VrColor;
+            TrendColor = i.TrendColor; ChopColor = i.ChopColor;
             base.CopyTemplate(indicator, style);
         }
 

@@ -129,9 +129,51 @@ static class Program
         }
 
         Console.WriteLine();
-        Console.WriteLine("3. Кэш RegimeData");
+        Console.WriteLine("3. VR и калибровка порогов");
         {
-            var n = 200;
+            // VR должен вести себя как ER по уровню, но заметно спокойнее по разбросу:
+            // он усредняет десятки перекрывающихся окон вместо одного.
+            int bars = 120000, sub = 60;
+            var rnd = new Random(20260921);
+            var h = new double[bars]; var l = new double[bars]; var c = new double[bars];
+            double p = 10000;
+            for (var i = 0; i < bars; i++)
+            {
+                double hi = p, lo = p;
+                for (var s = 0; s < sub; s++) { p += rnd.Next(2) == 0 ? 1 : -1; if (p > hi) hi = p; if (p < lo) lo = p; }
+                h[i] = hi; l[i] = lo; c[i] = p;
+            }
+            var er = new double[bars]; var rr = new double[bars]; var vr = new double[bars];
+            RegimeCore.Compute(h, l, c, bars, K, er, rr);
+            RegimeCore.ComputeVr(c, bars, K, 96, vr);
+
+            var sdEr = Sd(er, K + 100, bars);
+            var sdVr = Sd(vr, K + 200, bars);
+            var meanVr = Mean(vr, K + 200, bars);
+            Check(Math.Abs(meanVr - 1.0) < 0.06, $"VR на шуме: среднее {meanVr:F3} ≈ 1");
+            Check(sdVr < sdEr / 2.5, $"VR спокойнее ER: ст.откл {sdVr:F3} против {sdEr:F3}");
+
+            // На чистом тренде VR тоже уходит вверх
+            for (var i = 0; i < 400; i++) { c[i] = 100 + i; h[i] = c[i]; l[i] = c[i]; }
+            var tvr = new double[400];
+            RegimeCore.ComputeVr(c, 400, K, 96, tvr);
+            Check(tvr[399] > 3.0, $"тренд: VR = {tvr[399]:F2} (потолок √k = {RegimeCore.Ceiling(K):F2})");
+
+            // Квантили
+            var sample = new double[200];
+            for (var i = 0; i < 200; i++) sample[i] = i;         // 0..199
+            double qLo, qHi;
+            Check(RegimeCore.Quantiles(sample, 200, 200, 25, 75, out qLo, out qHi)
+                  && Math.Abs(qLo - 49.75) < 0.5 && Math.Abs(qHi - 149.25) < 0.5,
+                  $"квантили 25/75 = {qLo:F1}/{qHi:F1}");
+            Check(!RegimeCore.Quantiles(sample, 10, 200, 25, 75, out qLo, out qHi),
+                  "меньше 20 значений → калибровки нет, остаются ручные пороги");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("4. Кэш RegimeData");
+        {
+            var n = 800;
             var h = new double[n]; var l = new double[n]; var c = new double[n];
             var rnd = new Random(7);
             double p = 500;
@@ -143,24 +185,47 @@ static class Program
             ChartHelper.HighData = h; ChartHelper.LowData = l; ChartHelper.CloseData = c;
             var helper = new ChartHelper();
 
+            var manual = Settings(K, 1, false);
             var data = new RegimeData();
-            Check(data.Update(helper, n, K, 1, 1000), "первый расчёт выполнен");
+            Check(data.Update(helper, n, manual, 1000), "первый расчёт выполнен");
             Check(data.HasResult && !double.IsNaN(data.Er(n - 1)), $"ER последнего бара = {data.Er(n - 1):F3}");
-            Check(!data.Update(helper, n, K, 1, 1005), "цена не менялась → пересчёта нет");
+            Check(data.ErLow == manual.ErLow && data.ErHigh == manual.ErHigh, "ручной режим: пороги как заданы");
+            Check(!data.AutoApplied, "ручной режим: автокалибровки не было");
+            Check(!data.Update(helper, n, manual, 1005), "цена не менялась → пересчёта нет");
 
             c[n - 1] += 5;
-            Check(!data.Update(helper, n, K, 1, 1050), "цена сдвинулась, но троттлинг 100 мс ещё держит");
-            Check(data.Update(helper, n, K, 1, 1200), "прошло > 100 мс → пересчёт");
-            Check(data.Update(helper, n, K + 1, 1, 1205), "смена окна пересчитывает сразу, без троттлинга");
-            Check(data.Update(helper, n - 10, K + 1, 1, 1206), "смена числа баров пересчитывает сразу");
-            Check(!data.Update(null, n, K, 1, 9000), "helper == null → без исключения");
+            Check(!data.Update(helper, n, manual, 1050), "цена сдвинулась, но троттлинг 100 мс ещё держит");
+            Check(data.Update(helper, n, manual, 1200), "прошло > 100 мс → пересчёт");
+
+            var other = manual; other.Window = K + 1;
+            Check(data.Update(helper, n, other, 1205), "смена окна пересчитывает сразу, без троттлинга");
+            Check(data.Update(helper, n - 10, other, 1206), "смена числа баров пересчитывает сразу");
+
+            var auto = Settings(K, 1, true);
+            Check(data.Update(helper, n, auto, 1300), "переключение на автопороги пересчитывает");
+            Check(data.AutoApplied, "автопороги посчитаны");
+            Check(data.ErLow < data.ErHigh && data.RrLow < data.RrHigh, $"ER[{data.ErLow:F2};{data.ErHigh:F2}] RR[{data.RrLow:F2};{data.RrHigh:F2}]");
+            Check(data.ErHigh - data.ErLow > data.RrHigh - data.RrLow, "у ER разброс шире, чем у RR — пороги считаются раздельно");
+
+            // Доля подсвеченных баров = то, что заказано процентилями
+            var lit = 0; var total = 0;
+            for (var i = 0; i < data.Count; i++)
+            {
+                if (double.IsNaN(data.Er(i))) continue;
+                total++;
+                if (data.ErRegime(i) != 0) lit++;
+            }
+            var share = 100.0 * lit / total;
+            Check(share > 20 && share < 45, $"подсвечено {share:F0}% баров при процентилях 15/85 (ожидаем ≈30% на последних 500)");
+
+            Check(!data.Update(null, n, auto, 9000), "helper == null → без исключения");
 
             data.Reset();
             Check(!data.HasResult, "Reset очищает результат");
         }
 
         Console.WriteLine();
-        Console.WriteLine("4. Прогон «десериализованного инстанса» (конструктор НЕ выполняется)");
+        Console.WriteLine("5. Прогон «десериализованного инстанса» (конструктор НЕ выполняется)");
         {
             ChartDataProvider.Bars = 300;
             var n = ChartDataProvider.Bars;
@@ -179,15 +244,21 @@ static class Program
         }
 
         Console.WriteLine();
-        Console.WriteLine("5. Отрисовка");
+        Console.WriteLine("6. Отрисовка");
         {
-            var ind = new RegimeIndicator { Window = K, TrendLevel = 1.05, ChopLevel = 0.95 };
+            var ind = new RegimeIndicator
+            {
+                Window = K,
+                ThresholdMode = RegimeThresholdMode.Manual,
+                ErLow = 0.95, ErHigh = 1.05,
+                ShowVr = true, VrLookback = 32,
+            };
             Invoke(ind, "Execute");
 
             double min, max;
             Check(ind.GetMinMax(out min, out max), "GetMinMax вернул шкалу");
             Check(min <= 1.0 && max >= 1.0, $"шкала [{min:F2}; {max:F2}] включает уровень 1.0");
-            Check(min <= ind.ChopLevel && max >= ind.TrendLevel, "шкала включает оба порога");
+            Check(min <= ind.ErLow && max >= ind.ErHigh, "шкала включает оба порога главной метрики");
             IndicatorBase.ScaleMin = min; IndicatorBase.ScaleMax = max;
 
             var q = new DxVisualQueue();
@@ -195,16 +266,16 @@ static class Program
             var lines = q.Ops.FindAll(o => o.StartsWith("line")).Count;
             var fills = q.Ops.FindAll(o => o.StartsWith("fill")).Count;
             var texts = q.Ops.FindAll(o => o.StartsWith("text")).Count;
-            Check(lines > 100, $"линии нарисованы ({lines} сегментов: две метрики по видимым барам)");
+            Check(lines > 100, $"линии нарисованы ({lines} сегментов: три метрики по видимым барам)");
             Check(fills > 0, $"заливка режимов есть ({fills} прямоугольников)");
             Check(texts == 1, "строка состояния одна");
 
             var values = ind.GetValues(ChartCanvas.FirstBar + 50);
-            Check(values.Count == 2, "под курсором показываются оба значения");
+            Check(values.Count == 3, "под курсором показываются все три значения");
 
             var labels = new List<IndicatorLabelInfo>();
             ind.GetLabels(ref labels);
-            Check(labels.Count == 2, "на шкале две метки");
+            Check(labels.Count == 3, "на шкале три метки");
 
             // Индикатор сняли с графика — DataProvider обнулился
             IndicatorBase.ProviderAvailable = false;
@@ -217,7 +288,12 @@ static class Program
             Check(q2.Ops.Count == 0, "снятый с графика индикатор ничего не рисует и не падает");
             IndicatorBase.ProviderAvailable = true;
 
-            var shade = new RegimeShadeIndicator { Window = K, TrendLevel = 1.05, ChopLevel = 0.95 };
+            var shade = new RegimeShadeIndicator
+            {
+                Window = K,
+                ThresholdMode = RegimeThresholdMode.Manual,
+                ErLow = 0.95, ErHigh = 1.05,
+            };
             Invoke(shade, "Execute");
             var q3 = new DxVisualQueue();
             shade.Render(q3);
@@ -267,6 +343,33 @@ static class Program
             Console.WriteLine("         " + (ex.InnerException ?? ex));
             return false;
         }
+    }
+
+    static RegimeSettings Settings(int window, int smooth, bool auto)
+    {
+        RegimeSettings s;
+        s.Window = window; s.Smooth = smooth;
+        s.NeedVr = false; s.VrLookback = 96;
+        s.AutoThresholds = auto; s.AutoLookback = 500; s.LowPct = 15; s.HighPct = 85;
+        s.ErLow = 0.42; s.ErHigh = 1.49;
+        s.RrLow = 0.84; s.RrHigh = 1.22;
+        s.VrLow = 0.85; s.VrHigh = 1.09;
+        return s;
+    }
+
+    static double Mean(double[] a, int from, int to)
+    {
+        double sum = 0; var n = 0;
+        for (var i = from; i < to; i++) { if (double.IsNaN(a[i])) continue; sum += a[i]; n++; }
+        return n > 0 ? sum / n : double.NaN;
+    }
+
+    static double Sd(double[] a, int from, int to)
+    {
+        var m = Mean(a, from, to);
+        double sq = 0; var n = 0;
+        for (var i = from; i < to; i++) { if (double.IsNaN(a[i])) continue; sq += (a[i] - m) * (a[i] - m); n++; }
+        return n > 1 ? Math.Sqrt(sq / n) : double.NaN;
     }
 
     static void Invoke(object target, string method)

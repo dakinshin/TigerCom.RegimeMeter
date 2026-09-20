@@ -7,7 +7,7 @@
     <LangVersion>latest</LangVersion>
     <!-- Автоинкремент версии (как в остальных индикаторах): в логе видно, что грузится свежая сборка -->
     <Deterministic>false</Deterministic>
-    <AssemblyVersion>0.1.*</AssemblyVersion>
+    <AssemblyVersion>0.2.*</AssemblyVersion>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
   <ItemGroup>
