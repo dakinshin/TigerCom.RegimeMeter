@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>RegimeMeter</AssemblyName>
+    <RootNamespace>RegimeMeter</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <!-- Автоинкремент версии (как в остальных индикаторах): в логе видно, что грузится свежая сборка -->
+    <Deterministic>false</Deterministic>
+    <AssemblyVersion>0.1.*</AssemblyVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="RegimeCore.cs" />
+    <Compile Include="ChartArrays.cs" />
+    <Compile Include="RegimeData.cs" />
+    <Compile Include="RegimeIndicator.cs" />
+    <Compile Include="RegimeShadeIndicator.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="TigerTrade.Chart">
+      <HintPath>$(TigerDir)\TigerTrade.Chart.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TigerTrade.Core">
+      <HintPath>$(TigerDir)\TigerTrade.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TigerTrade.Dx">
+      <HintPath>$(TigerDir)\TigerTrade.Dx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+  <PropertyGroup>
+    <TigerDir Condition="'$(TigerDir)' == ''">C:\Program Files (x86)\TigerTrade</TigerDir>
+  </PropertyGroup>
+</Project>
