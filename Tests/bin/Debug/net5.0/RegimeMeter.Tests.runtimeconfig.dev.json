@@ -1,0 +1,8 @@
+{
+  "runtimeOptions": {
+    "additionalProbingPaths": [
+      "/Users/tars/.dotnet/store/|arch|/|tfm|",
+      "/private/tmp/avanpost-nuget-packages"
+    ]
+  }
+}

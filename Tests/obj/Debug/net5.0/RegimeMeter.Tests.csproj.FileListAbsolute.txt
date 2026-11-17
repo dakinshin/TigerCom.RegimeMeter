@@ -1,0 +1,15 @@
+/Users/tars/Projects/tiger.com/RegimeMeter/Tests/bin/Debug/net5.0/RegimeMeter.Tests.deps.json
+/Users/tars/Projects/tiger.com/RegimeMeter/Tests/bin/Debug/net5.0/RegimeMeter.Tests.runtimeconfig.json
+/Users/tars/Projects/tiger.com/RegimeMeter/Tests/bin/Debug/net5.0/RegimeMeter.Tests.runtimeconfig.dev.json
+/Users/tars/Projects/tiger.com/RegimeMeter/Tests/bin/Debug/net5.0/RegimeMeter.Tests.dll
+/Users/tars/Projects/tiger.com/RegimeMeter/Tests/bin/Debug/net5.0/ref/RegimeMeter.Tests.dll
+/Users/tars/Projects/tiger.com/RegimeMeter/Tests/bin/Debug/net5.0/RegimeMeter.Tests.pdb
+/Users/tars/Projects/tiger.com/RegimeMeter/Tests/obj/Debug/net5.0/RegimeMeter.Tests.csproj.AssemblyReference.cache
+/Users/tars/Projects/tiger.com/RegimeMeter/Tests/obj/Debug/net5.0/RegimeMeter.Tests.GeneratedMSBuildEditorConfig.editorconfig
+/Users/tars/Projects/tiger.com/RegimeMeter/Tests/obj/Debug/net5.0/RegimeMeter.Tests.AssemblyInfoInputs.cache
+/Users/tars/Projects/tiger.com/RegimeMeter/Tests/obj/Debug/net5.0/RegimeMeter.Tests.AssemblyInfo.cs
+/Users/tars/Projects/tiger.com/RegimeMeter/Tests/obj/Debug/net5.0/RegimeMeter.Tests.csproj.CoreCompileInputs.cache
+/Users/tars/Projects/tiger.com/RegimeMeter/Tests/obj/Debug/net5.0/RegimeMeter.Tests.dll
+/Users/tars/Projects/tiger.com/RegimeMeter/Tests/obj/Debug/net5.0/ref/RegimeMeter.Tests.dll
+/Users/tars/Projects/tiger.com/RegimeMeter/Tests/obj/Debug/net5.0/RegimeMeter.Tests.pdb
+/Users/tars/Projects/tiger.com/RegimeMeter/Tests/obj/Debug/net5.0/RegimeMeter.Tests.genruntimeconfig.cache
